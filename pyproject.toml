@@ -1,0 +1,10 @@
+[project]
+name = "pulsar-gait"
+version = "0.1.0"
+description = "Experimental phone-IMU step counting, synthetic gait data and MET energy demo"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
