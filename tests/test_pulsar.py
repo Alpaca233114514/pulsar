@@ -9,6 +9,7 @@ import tempfile
 import unittest
 
 from pulsar import DetectorConfig, Gait, Placement, Recording, Sample, SimulationConfig, StepCounter, estimate_calories, simulate
+from pulsar.benchmark import export_baseline_predictions, generate_benchmark
 from pulsar.dataset import generate_dataset
 from pulsar.denoise import hampel, preprocess
 from pulsar.evaluation import evaluate
@@ -231,6 +232,59 @@ class EnergyAndEvaluationTests(unittest.TestCase):
         metrics = evaluate(result, sim.events)
         self.assertEqual(metrics["matched_events"], 1)
         self.assertAlmostEqual(metrics["event_precision"], 1 / 3)
+
+
+class BenchmarkAndOODTests(unittest.TestCase):
+    def test_ood_simulator_modes_and_validation(self):
+        for mode in ("periodic", "chirp", "burst", "irregular"):
+            sim = simulate(SimulationConfig(activity="hand_motion", hand_motion_mode=mode,
+                                            hand_motion_freq_hz=1.8, duration_s=8, seed=7))
+            self.assertEqual(sim.events, [])
+            self.assertGreater(len(sim.recording.samples), 100)
+        other = simulate(SimulationConfig(activity="non_walking_other", duration_s=8, seed=9))
+        self.assertEqual(other.events, [])
+        for shape in ("skewed", "double_peak"):
+            sim = simulate(SimulationConfig(gait=Gait.CRUTCH, pulse_shape=shape,
+                                            crutch_offset_jitter_s=0.05, duration_s=10, seed=11))
+            self.assertGreater(sum(e.kind == "foot_contact" for e in sim.events), 5)
+        with self.assertRaises(ValueError):
+            SimulationConfig(pulse_shape="unknown")
+        with self.assertRaises(ValueError):
+            SimulationConfig(hand_motion_mode="unknown")
+
+    def test_benchmark_disjoint_tiers_and_baseline_export(self):
+        tmp = test_directory()
+        root = Path(tmp) / "bench"
+        summary = generate_benchmark(
+            root, train_subjects=3, val_subjects=3, ood_subjects=3, test_subjects=3,
+            duration_s=12, seed=101, feature_mode="causal_window",
+        )
+        self.assertEqual(summary["feature_context"], "causal_window")
+        seen_subjects = set()
+        for tier in ("id_dev", "id_val", "ood_stress", "sealed_test"):
+            truth = json.loads((root / f"truth_{tier}.json").read_text(encoding="utf-8"))
+            self.assertEqual(truth["format"], "pulsar.benchmark_truth.v1")
+            self.assertEqual(truth["sealed"], tier == "sealed_test")
+            tier_subjects = {s["subject_id"] for s in truth["sessions"]}
+            self.assertTrue(seen_subjects.isdisjoint(tier_subjects))
+            seen_subjects.update(tier_subjects)
+            for session in truth["sessions"]:
+                if session["activity"] != "walking":
+                    self.assertEqual(session["truth_steps"], 0)
+                    self.assertEqual(session["foot_contact_times_s"], [])
+        for baseline, expected_gran in (("step_counter", "event"), ("zero", "window"), ("window_ridge", "window")):
+            out = Path(tmp) / f"pred_{baseline}.json"
+            meta = export_baseline_predictions(root, "truth_id_val.json", out, baseline=baseline)
+            pred = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(pred["format"], "pulsar.predictions.v1")
+            self.assertEqual(pred["prediction_granularity"], expected_gran)
+            self.assertEqual(pred["truth_sha256"], summary["truth_files"]["id_val"]["sha256"])
+            self.assertEqual(meta["truth_sha256"], pred["truth_sha256"])
+            if expected_gran == "event":
+                self.assertEqual(len(pred["sessions"]), 9)
+            else:
+                self.assertGreater(len(pred["windows"]), 0)
+                self.assertTrue(all(w["predicted_steps"] >= 0 for w in pred["windows"]))
 
 
 if __name__ == "__main__":

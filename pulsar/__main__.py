@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 
 from .algorithm import DetectorConfig, StepCounter
+from .benchmark import export_baseline_predictions, generate_benchmark
 from .dataset import generate_dataset
 from .demo import run_demo
 from .energy import estimate_calories
@@ -36,6 +37,21 @@ def main(argv=None):
     dataset.add_argument("--sessions", type=int, default=2)
     dataset.add_argument("--duration", type=float, default=20)
     dataset.add_argument("--seed", type=int, default=20261111)
+    bench = commands.add_parser("benchmark", help="Generate ID/OOD/sealed truth suite and causal windows")
+    bench.add_argument("--out", type=Path, required=True)
+    bench.add_argument("--train-subjects", type=int, default=24)
+    bench.add_argument("--val-subjects", type=int, default=12)
+    bench.add_argument("--ood-subjects", type=int, default=12)
+    bench.add_argument("--test-subjects", type=int, default=12)
+    bench.add_argument("--duration", type=float, default=25)
+    bench.add_argument("--seed", type=int, default=20261123)
+    bench.add_argument("--feature-mode", choices=("causal_window", "offline_centered"), default="causal_window")
+    exp = commands.add_parser("export-baseline", help="Export baseline pulsar.predictions.v1 JSON on a benchmark tier")
+    exp.add_argument("--benchmark", type=Path, required=True)
+    exp.add_argument("--truth", type=Path, required=True, help="Truth JSON file path or filename inside --benchmark")
+    exp.add_argument("--out", type=Path, required=True)
+    exp.add_argument("--baseline", choices=("step_counter", "zero", "window_ridge"), default="step_counter")
+    exp.add_argument("--model-id")
     analyze = commands.add_parser("analyze", help="Analyze real or synthetic sensor CSV/JSON")
     analyze.add_argument("path", type=Path)
     analyze.add_argument("--gait", choices=list(Gait), required=True)
@@ -70,6 +86,16 @@ def main(argv=None):
         elif args.command == "dataset":
             output = generate_dataset(args.out, subjects=args.subjects, sessions=args.sessions,
                                       duration_s=args.duration, seed=args.seed)
+        elif args.command == "benchmark":
+            output = generate_benchmark(
+                args.out, train_subjects=args.train_subjects, val_subjects=args.val_subjects,
+                ood_subjects=args.ood_subjects, test_subjects=args.test_subjects,
+                duration_s=args.duration, seed=args.seed, feature_mode=args.feature_mode,
+            )
+        elif args.command == "export-baseline":
+            output = export_baseline_predictions(
+                args.benchmark, args.truth, args.out, baseline=args.baseline, model_id=args.model_id,
+            )
         elif args.command == "analyze":
             if (args.weight_kg is None) != (args.met is None):
                 raise ValueError("Supply both --weight-kg and --met for calories")
